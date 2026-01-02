@@ -8,6 +8,109 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
+# --- 数据预设：全美主流银行与热门卡片 (参考 USCreditCardGuide) ---
+POPULAR_CARDS = {
+    "Chase": [
+        "Sapphire Preferred",
+        "Sapphire Reserve",
+        "Freedom Flex",
+        "Freedom Unlimited",
+        "Freedom Rise",
+        "Ink Business Preferred",
+        "Ink Business Cash",
+        "Ink Business Unlimited",
+        "Ink Business Premier",
+        "United Explorer",
+        "United Quest",
+        "United Club Infinite",
+        "Marriott Bonvoy Boundless",
+        "Marriott Bonvoy Bold",
+        "Ritz-Carlton",
+        "World of Hyatt",
+        "World of Hyatt Business",
+        "IHG One Rewards Premier",
+        "IHG One Rewards Traveler",
+        "Aeroplan",
+        "British Airways",
+        "Southwest Priority",
+    ],
+    "Amex": [
+        "Platinum",
+        "Gold",
+        "Green",
+        "Blue Cash Preferred",
+        "Blue Cash Everyday",
+        "EveryDay Preferred",
+        "Business Platinum",
+        "Business Gold",
+        "Blue Business Plus",
+        "Delta SkyMiles Gold",
+        "Delta SkyMiles Platinum",
+        "Delta SkyMiles Reserve",
+        "Hilton Honors Aspire",
+        "Hilton Honors Surpass",
+        "Hilton Honors",
+        "Marriott Bonvoy Brilliant",
+        "Marriott Bonvoy Bevy",
+    ],
+    "Citi": [
+        "Strata Premier",
+        "Double Cash",
+        "Custom Cash",
+        "Rewards+",
+        "Costco Anywhere",
+        "Simplicity",
+        "Diamond Preferred",
+        "AAdvantage Platinum Select",
+        "AAdvantage Executive",
+        "AAdvantage MileUp",
+    ],
+    "Capital One": [
+        "Venture X",
+        "Venture",
+        "VentureOne",
+        "Savor",
+        "SavorOne",
+        "Quicksilver",
+        "QuicksilverOne",
+        "Spark Cash Plus",
+        "Spark Miles",
+    ],
+    "BoA (Bank of America)": [
+        "Customized Cash Rewards",
+        "Unlimited Cash Rewards",
+        "Premium Rewards",
+        "Premium Rewards Elite",
+        "Travel Rewards",
+        "Alaska Airlines Visa",
+    ],
+    "US Bank": [
+        "Altitude Reserve",
+        "Altitude Connect",
+        "Altitude Go",
+        "Cash+",
+        "Shopper Cash Rewards",
+        "FlexPerks Gold",
+    ],
+    "Wells Fargo": [
+        "Autograph Journey",
+        "Autograph",
+        "Active Cash",
+        "Reflect",
+        "Attune",
+        "Bilt Mastercard",  # Bilt 其实是 WF 发行的，但也常单独列出
+    ],
+    "Barclays": [
+        "AAdvantage Aviator Red",
+        "JetBlue Plus",
+        "Wyndham Rewards Earner",
+        "Hawaiian Airlines",
+    ],
+    "Discover": ["It Cash Back", "It Miles", "It Chrome"],
+    "Bilt": ["Bilt Mastercard"],
+    "Other": [],  # 兜底选项
+}
+
 # --- 1. 路径配置 (确保能找到 src 下的模块) ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -132,31 +235,82 @@ with st.sidebar:
                         st.rerun()
                 st.markdown("---")  # 分割线
 
-    # === B. Add New Card (紧凑表单) ===
+    # === B. Add New Card (交互式表单) ===
     with st.expander("➕ Add New Card", expanded=False):
-        with st.form("add_card_form", clear_on_submit=True):
-            col_a, col_b = st.columns(2)
-            with col_a:
-                new_bank = st.text_input("Bank", placeholder="Chase")
-            with col_b:
-                new_network = st.selectbox(
-                    "Network", ["Visa", "Mastercard", "Amex", "Discover"]
+        # 1. 选择银行 (Bank)
+        bank_options = list(POPULAR_CARDS.keys())
+        selected_bank = st.selectbox("Bank", bank_options, index=0)
+
+        # 处理 "Other" 银行的情况
+        if selected_bank == "Other":
+            final_bank = st.text_input("Enter Bank Name", placeholder="e.g. Synchrony")
+        else:
+            final_bank = selected_bank
+
+        # 2. 选择卡片 (Card Name)
+        card_list = POPULAR_CARDS.get(selected_bank, [])
+        card_options = card_list + ["Other / Type Manually"]
+
+        selected_card_name = st.selectbox("Card Name", card_options)
+
+        if selected_card_name == "Other / Type Manually":
+            final_card_name = st.text_input(
+                "Enter Card Name", placeholder="e.g. Autograph"
+            )
+        else:
+            final_card_name = selected_card_name
+
+        # 3. 网络与尾号 (并排显示)
+        col_net, col_last4 = st.columns(2)
+
+        with col_net:
+            # 增加 "Unknown" 选项，并将其作为默认
+            network_options = ["Unknown", "Visa", "Mastercard", "Amex", "Discover"]
+
+            # 智能推断逻辑 (仅针对非常确定的情况)
+            default_idx = 0  # 默认为 "Unknown"
+
+            if final_bank == "Amex":
+                default_idx = 3  # Amex 在列表中的索引是 3
+            elif final_bank == "Discover":
+                default_idx = 4  # Discover 在列表中的索引是 4
+            elif final_bank == "Bilt":
+                default_idx = 2  # Mastercard
+            # 对于 Chase/Citi 这种既有 Visa 又有 Mastercard 的，保持 Unknown 让用户省心
+
+            final_network = st.selectbox(
+                "Network (Optional)", network_options, index=default_idx
+            )
+
+        with col_last4:
+            # 尾号输入 (可选)
+            last_four_input = st.text_input(
+                "Last 4 (Optional)", max_chars=4, placeholder="8888"
+            )
+            final_last_four = last_four_input if last_four_input else "0000"
+
+        # 4. 添加按钮
+        if st.button("Add to Wallet", use_container_width=True):
+            if final_bank and final_card_name:
+                # 即使 Network 是 Unknown 也不影响添加
+                new_card = CreditCard(
+                    bank=final_bank,
+                    name=final_card_name,
+                    network=final_network,
+                    last_four=final_last_four,
                 )
+                st.session_state.user_profile.add_card(new_card)
 
-            new_name = st.text_input("Card Name", placeholder="Sapphire Preferred")
+                # 成功提示
+                display_name = f"{final_bank} {final_card_name}"
+                if final_last_four != "0000":
+                    display_name += f" ({final_last_four})"
 
-            if st.form_submit_button("Add to Wallet", use_container_width=True):
-                if new_bank and new_name:
-                    new_card = CreditCard(
-                        bank=new_bank,
-                        name=new_name,
-                        network=new_network,
-                        last_four="0000",
-                    )
-                    st.session_state.user_profile.add_card(new_card)
-                    st.success("Added!")
-                    time.sleep(0.5)
-                    st.rerun()
+                st.success(f"Added {display_name}!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("Please fill in Bank and Card Name.")
 
     # === C. Reset ===
     if st.button("🔄 Reset Demo", use_container_width=True):
