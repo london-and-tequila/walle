@@ -51,24 +51,72 @@ if "user_profile" not in st.session_state:
     st.session_state.user_profile = user
 
 # --- 4. 侧边栏：显示用户画像 ---
+# --- 4. 侧边栏：用户配置 (User Profile Control) ---
 with st.sidebar:
     st.title("💳 Walle's Brain")
-    st.markdown("---")
-    st.subheader("Current User Profile")
+
+    # === 部分 A: 展示当前卡片 (Current Deck) ===
+    st.subheader("Your Wallet")
 
     user = st.session_state.user_profile
-    for card in user.cards:
-        with st.expander(f"{card.bank} {card.name}", expanded=True):
-            st.markdown(f"**Network:** {card.network}")
-            st.markdown("**Benefits:**")
-            for ben in card.benefits:
-                st.caption(f"• {ben.name}: ${ben.remaining_amount} left")
 
-    st.markdown("---")
-    if st.button("Clear Chat History"):
-        st.session_state.messages = []
+    if not user.cards:
+        st.info("No cards yet. Add one below!")
+    else:
+        # 遍历卡片，显示删除按钮
+        for i, card in enumerate(user.cards):
+            # 使用 expander 既能看详情，又能收起节省空间
+            with st.expander(f"{card.bank} {card.name}", expanded=False):
+                st.write(f"**Network:** {card.network}")
+                st.write("**Benefits:**")
+                if card.benefits:
+                    for ben in card.benefits:
+                        st.caption(f"• {ben.name}: ${ben.remaining_amount}")
+                else:
+                    st.caption("(AI will infer standard benefits)")
+
+                # 删除按钮 (使用唯一的 key 防止冲突)
+                if st.button("🗑️ Remove", key=f"remove_{i}"):
+                    user.cards.pop(i)
+                    st.rerun()  # 强制刷新页面以更新列表
+
+    st.divider()
+
+    # === 部分 B: 添加新卡 (Add New Card) ===
+    st.subheader("Add New Card")
+
+    with st.form("add_card_form"):
+        new_bank = st.text_input("Bank", placeholder="e.g. Citi")
+        new_name = st.text_input("Card Name", placeholder="e.g. Custom Cash")
+        new_network = st.selectbox(
+            "Network", ["Visa", "Mastercard", "Amex", "Discover"]
+        )
+
+        # 简单起见，我们在网页添加时暂不手动输入复杂的 Benefits
+        # Walle 的大脑足够聪明，如果你只有卡名，它会根据通用知识推理福利
+        submitted = st.form_submit_button("➕ Add Card")
+
+        if submitted and new_bank and new_name:
+            # 创建新卡对象
+            new_card = CreditCard(
+                bank=new_bank,
+                name=new_name,
+                network=new_network,
+                last_four="0000",  # 占位符
+            )
+            # 添加到 Session State
+            st.session_state.user_profile.add_card(new_card)
+            st.success(f"Added {new_name}!")
+            time.sleep(0.5)
+            st.rerun()
+
+    st.divider()
+
+    # === 部分 C: 重置数据 ===
+    if st.button("🔄 Reset to Default Demo"):
+        # 清空 Session State 中的 key，触发重新初始化
+        del st.session_state.user_profile
         st.rerun()
-
 # --- 5. 核心逻辑函数 ---
 
 
