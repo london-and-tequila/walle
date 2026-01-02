@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import sys
 import time
@@ -10,7 +11,7 @@ from google.genai import types
 
 # --- 路径配置 (必须在 import src 之前) ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+# 引入新工具
 from src.models import CreditCard
 from src.storage import (
     delete_card_from_db,
@@ -19,6 +20,7 @@ from src.storage import (
     update_card_in_db,
 )
 from src.tools.search import search_credit_card_info
+from src.utils import create_google_calendar_url, create_ics_file_content
 
 # --- 1. 国际化字典 (Translation Dictionary) ---
 TRANSLATIONS = {
@@ -218,6 +220,97 @@ POPULAR_CARDS = {
 }
 
 
+def analyze_benefits_with_gemini(user_profile):
+    """调用 AI 分析当前卡片的福利，并返回结构化 JSON"""
+    client = get_gemini_client()
+    today_year = datetime.date.today().year
+
+    # 构造专门的 Prompt
+    prompt = f"""
+    Analyze the following credit cards held by the user:
+    {user_profile.get_summary()}
+    
+    Task:
+    Identify time-sensitive benefits (credits, free nights, allowances) that expire annually or monthly.
+    Return a JSON list. Do not output markdown code blocks, just raw JSON.
+    
+    Format:
+    [
+        {{
+            "card": "Card Name",
+            "benefit": "Benefit Title (e.g. $50 Hotel Credit)",
+            "deadline": "YYYY-MM-DD" (Assume current year {today_year}. If monthly, use end of this month),
+            "description": "Brief instruction on how to use it."
+        }}
+    ]
+    """
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-latest", contents=[prompt]
+        )
+        # 清洗数据，防止 AI 加 ```json 包裹
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_text)
+    except Exception:
+        return []
+
+
+# --- Gemini 逻辑 (保持不变) ---
+def get_gemini_client():
+    return genai.Client(api_key=api_key)
+
+
+def generate_response_with_retry(prompt, history):
+    client = get_gemini_client()
+    user_p = st.session_state.user_profile
+
+    # 🔥 1. 获取准确的今天日期
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+
+    lang_instruction = (
+        "Respond in English." if st.session_state.language == "en" else "请用中文回答。"
+    )
+
+    # 🔥 2. 强制在 System Prompt 的最开头注入日期
+    # 注意：这里必须用 f""" ... """ 格式化字符串
+    SYSTEM_INSTRUCTION = f"""
+    [SYSTEM INFO]
+    Current Date: {today_str}
+    Role: You are Walle, an expert credit card agent.
+    
+    [USER CONTEXT]
+    {user_p.get_summary()}
+    
+    [TASK GUIDELINES]
+    1. Always SEARCH before answering about quarterly categories.
+    2. For Chase 5/24 Rule:
+       - Today is {today_str}.
+       - Check the 'Opened' date of each card in User Context.
+       - Any card opened more than 24 months ago does NOT count.
+       - Only count cards opened strictly within the last 24 months.
+       - Example: If today is 2026-01-02, a card opened on 2023-07-01 is >24 months old (30 months), so count = 0.
+    
+    {lang_instruction}
+    """
+
+    tools = [search_credit_card_info]
+    contents = [msg["content"] for msg in history]
+    contents.append(prompt)
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                tools=tools, system_instruction=SYSTEM_INSTRUCTION
+            ),
+        )
+        return response.text
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # --- 1. 登录逻辑与侧边栏 (Sidebar) ---
 def render_login_sidebar():
     with st.sidebar:
@@ -411,67 +504,53 @@ with st.sidebar:
             else:
                 st.error(t("missing_info"))
 
+    # === C. Benefit Reminders (新功能区域) ===
+    st.divider()
+    with st.expander("🎁 Benefit Reminders / 福利日历", expanded=False):
+        st.caption("AI Auto-detects expiring credits")
+
+        if st.button("🔍 Analyze & Generate Calendar", use_container_width=True):
+            with st.spinner("AI is scanning your wallet benefits..."):
+                benefits_data = analyze_benefits_with_gemini(
+                    st.session_state.user_profile
+                )
+                st.session_state.benefits_result = benefits_data
+
+        # 显示结果
+        if "benefits_result" in st.session_state and st.session_state.benefits_result:
+            for item in st.session_state.benefits_result:
+                st.markdown(f"**{item['card']}**")
+                st.info(f"📌 {item['benefit']}\n\n📅 Deadline: {item['deadline']}")
+
+                # 生成链接/文件
+                gcal_link = create_google_calendar_url(
+                    item["benefit"], item["description"], item["deadline"]
+                )
+                ics_content = create_ics_file_content(
+                    item["benefit"], item["description"], item["deadline"]
+                )
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(
+                        f"[![Google](https://img.shields.io/badge/Google-Calendar-blue)]({gcal_link})"
+                    )
+                with c2:
+                    st.download_button(
+                        label="Download .ics",
+                        data=ics_content,
+                        file_name=f"reminder_{item['benefit'].replace(' ', '_')}.ics",
+                        mime="text/calendar",
+                        key=f"dl_{item['benefit']}",
+                    )
+                st.divider()
+
 
 # --- 主界面 Layout ---
 
 # 🌟 修改：直接显示标题，删除之前的 col_main_title / col_main_lang 分栏逻辑
 st.title(t("page_title"))
 st.caption(t("page_caption"))
-
-
-# --- Gemini 逻辑 (保持不变) ---
-def get_gemini_client():
-    return genai.Client(api_key=api_key)
-
-
-def generate_response_with_retry(prompt, history):
-    client = get_gemini_client()
-    user_p = st.session_state.user_profile
-
-    # 🔥 1. 获取准确的今天日期
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-
-    lang_instruction = (
-        "Respond in English." if st.session_state.language == "en" else "请用中文回答。"
-    )
-
-    # 🔥 2. 强制在 System Prompt 的最开头注入日期
-    # 注意：这里必须用 f""" ... """ 格式化字符串
-    SYSTEM_INSTRUCTION = f"""
-    [SYSTEM INFO]
-    Current Date: {today_str}
-    Role: You are Walle, an expert credit card agent.
-    
-    [USER CONTEXT]
-    {user_p.get_summary()}
-    
-    [TASK GUIDELINES]
-    1. Always SEARCH before answering about quarterly categories.
-    2. For Chase 5/24 Rule:
-       - Today is {today_str}.
-       - Check the 'Opened' date of each card in User Context.
-       - Any card opened more than 24 months ago does NOT count.
-       - Only count cards opened strictly within the last 24 months.
-       - Example: If today is 2026-01-02, a card opened on 2023-07-01 is >24 months old (30 months), so count = 0.
-    
-    {lang_instruction}
-    """
-
-    tools = [search_credit_card_info]
-    contents = [msg["content"] for msg in history]
-    contents.append(prompt)
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                tools=tools, system_instruction=SYSTEM_INSTRUCTION
-            ),
-        )
-        return response.text
-    except Exception as e:
-        return f"Error: {str(e)}"
 
 
 # --- Hero Section (空状态) ---
