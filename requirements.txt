@@ -2,3 +2,5 @@ streamlit
 google-genai
 tavily-python
 python-dotenv
+gspread
+oauth2client

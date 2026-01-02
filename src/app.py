@@ -8,6 +8,8 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
+from src.storage import delete_card_from_db, load_user_data, save_new_card
+
 # --- 数据预设：全美主流银行与热门卡片 (参考 USCreditCardGuide) ---
 POPULAR_CARDS = {
     "Chase": [
@@ -114,7 +116,7 @@ POPULAR_CARDS = {
 # --- 1. 路径配置 (确保能找到 src 下的模块) ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.models import Benefit, CreditCard, UserProfile
+from src.models import CreditCard
 from src.tools.search import search_credit_card_info
 
 # --- 2. 页面配置 ---
@@ -192,22 +194,11 @@ def get_network_icon(network):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# 🔥 核心修改：不再使用 hardcoded 数据，而是从 Google Sheets 加载
 if "user_profile" not in st.session_state:
-    user = UserProfile(user_id="owner_001")
-    # 默认卡片 (Demo)
-    cf = CreditCard(
-        bank="Chase", name="Freedom Flex", network="Mastercard", last_four="1234"
-    )
-    cf.add_benefit(
-        Benefit("Quarterly 5%", "rotation", "5% cashback", "quarterly", 1500.0)
-    )
-    user.add_card(cf)
-    plat = CreditCard(bank="Amex", name="Platinum", network="Amex", last_four="9999")
-    plat.add_benefit(Benefit("Uber Cash", "transport", "$15 monthly", "monthly", 15.0))
-    user.add_card(plat)
-    st.session_state.user_profile = user
-
-
+    with st.spinner("Connecting to Walle Brain (Database)..."):
+        # 默认加载 owner_001 的数据
+        st.session_state.user_profile = load_user_data(user_id="owner_001")
 # --- 侧边栏设计 (重构版) ---
 with st.sidebar:
     st.title("🤖 Walle Brain")
@@ -231,6 +222,10 @@ with st.sidebar:
                     st.caption(f"{icon} {card.network} • *{card.last_four}*")
                 with col2:
                     if st.button("✕", key=f"del_{i}", help="Remove Card"):
+                        # 🔥 1. 先从云端数据库删除
+                        delete_card_from_db("owner_001", i)
+
+                        # 2. 再从本地删除
                         user.cards.pop(i)
                         st.rerun()
                 st.markdown("---")  # 分割线
@@ -292,25 +287,22 @@ with st.sidebar:
         # 4. 添加按钮
         if st.button("Add to Wallet", use_container_width=True):
             if final_bank and final_card_name:
-                # 即使 Network 是 Unknown 也不影响添加
                 new_card = CreditCard(
                     bank=final_bank,
                     name=final_card_name,
                     network=final_network,
                     last_four=final_last_four,
                 )
+
+                # 🔥 1. 先保存到云端数据库
+                save_new_card("owner_001", new_card)
+
+                # 2. 再更新本地 Session State (为了即时显示，不用重新拉取数据库)
                 st.session_state.user_profile.add_card(new_card)
 
-                # 成功提示
-                display_name = f"{final_bank} {final_card_name}"
-                if final_last_four != "0000":
-                    display_name += f" ({final_last_four})"
-
-                st.success(f"Added {display_name}!")
+                st.success(f"Added {final_bank} {final_card_name}!")
                 time.sleep(0.5)
                 st.rerun()
-            else:
-                st.error("Please fill in Bank and Card Name.")
 
     # === C. Reset ===
     if st.button("🔄 Reset Demo", use_container_width=True):
