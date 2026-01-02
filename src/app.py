@@ -12,7 +12,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 from src.models import CreditCard
-from src.storage import delete_card_from_db, load_user_data, save_new_card
+from src.storage import (
+    delete_card_from_db,
+    load_user_data,
+    save_new_card,
+    update_card_in_db,
+)
 from src.tools.search import search_credit_card_info
 
 # --- 数据预设：全美主流银行与热门卡片 (参考 USCreditCardGuide) ---
@@ -254,6 +259,9 @@ def get_network_icon(network):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "active_edit_index" not in st.session_state:
+    st.session_state.active_edit_index = None
+
 # 🔥 核心修改：不再使用 hardcoded 数据，而是从 Google Sheets 加载
 if "user_profile" not in st.session_state:
     with st.spinner(f"Loading wallet for {CURRENT_USER_ID}..."):
@@ -267,29 +275,110 @@ with st.sidebar:
     st.markdown("---")
 
     # === A. My Wallet (卡片列表) ===
+    # === A. My Wallet (卡片列表) ===
     st.subheader("💳 Your Wallet")
 
     user = st.session_state.user_profile
     if not user.cards:
-        st.warning("No cards loaded.")
+        st.info("No cards yet. Add one below!")
     else:
         for i, card in enumerate(user.cards):
             icon = get_network_icon(card.network)
-            # 使用更紧凑的显示方式
-            with st.container():
-                col1, col2 = st.columns([0.8, 0.2])
-                with col1:
-                    st.markdown(f"**{card.bank} {card.name}**")
-                    st.caption(f"{icon} {card.network} • *{card.last_four}*")
-                with col2:
-                    if st.button("✕", key=f"del_{i}", help="Remove Card"):
-                        # 🔥 1. 先从云端数据库删除
-                        delete_card_from_db(CURRENT_USER_ID, i)
 
-                        # 2. 再从本地删除
-                        user.cards.pop(i)
-                        st.rerun()
-                st.markdown("---")  # 分割线
+            # 这里的 Expander 只是容器
+            with st.expander(
+                f"{icon} {card.bank} {card.name} (...{card.last_four})", expanded=False
+            ):
+                # 🔄 核心逻辑：判断当前卡片是否处于编辑状态
+                # 如果 active_edit_index 等于当前的 i，显示表单；否则显示详情
+                if st.session_state.active_edit_index == i:
+                    # === [编辑模式] ===
+                    with st.form(key=f"edit_form_{i}"):
+                        new_bank = st.text_input("Bank", value=card.bank)
+                        new_name = st.text_input("Card Name", value=card.name)
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            nets = ["Unknown", "Visa", "Mastercard", "Amex", "Discover"]
+                            curr_idx = (
+                                nets.index(card.network) if card.network in nets else 0
+                            )
+                            new_net = st.selectbox("Network", nets, index=curr_idx)
+                        with col2:
+                            new_last4 = st.text_input(
+                                "Last 4", value=card.last_four, max_chars=4
+                            )
+
+                        # 日期处理
+                        import datetime
+
+                        default_date = None
+                        if card.open_date:
+                            try:
+                                default_date = datetime.datetime.strptime(
+                                    card.open_date, "%Y-%m-%d"
+                                ).date()
+                            except:
+                                pass
+                        new_open_date = st.date_input("Open Date", value=default_date)
+
+                        # 💾 保存逻辑
+                        if st.form_submit_button("💾 Save"):
+                            # 1. 更新数据对象
+                            date_str = (
+                                new_open_date.strftime("%Y-%m-%d")
+                                if new_open_date
+                                else ""
+                            )
+                            updated_card = CreditCard(
+                                bank=new_bank,
+                                name=new_name,
+                                network=new_net,
+                                last_four=new_last4,
+                                open_date=date_str,
+                            )
+
+                            # 2. 更新数据库
+                            update_card_in_db(CURRENT_USER_ID, i, updated_card)
+
+                            # 3. 更新本地 Session
+                            user.cards[i] = updated_card
+
+                            # 🔥 4. 关键：保存成功后，把“当前编辑索引”设为 None，即退出编辑模式
+                            st.session_state.active_edit_index = None
+
+                            st.success("Updated!")
+                            time.sleep(0.5)
+                            st.rerun()
+
+                else:
+                    # === [查看模式] ===
+                    st.write(f"**Network:** {card.network}")
+                    st.write(f"**Last 4:** {card.last_four}")
+                    st.write(
+                        f"**Opened:** {card.open_date if card.open_date else 'N/A'}"
+                    )
+
+                    col_edit, col_del = st.columns([1, 1])
+
+                    # ✏️ 这是一个普通按钮，点击后通过 callback 修改 active_edit_index
+                    with col_edit:
+
+                        def enter_edit_mode(index):
+                            st.session_state.active_edit_index = index
+
+                        st.button(
+                            "✏️ Edit",
+                            key=f"btn_edit_{i}",
+                            on_click=enter_edit_mode,
+                            args=(i,),
+                        )
+
+                    with col_del:
+                        if st.button("🗑️ Del", key=f"del_{i}"):
+                            delete_card_from_db(CURRENT_USER_ID, i)
+                            user.cards.pop(i)
+                            st.rerun()
 
     # === B. Add New Card (交互式表单) ===
     with st.expander("➕ Add New Card", expanded=False):
@@ -466,23 +555,93 @@ def generate_response_with_retry(prompt, history):
     return "❌ System Error: Max retries exceeded. The API is too busy."
 
 
-# 渲染历史消息
+# ==========================================
+# 3. 主界面 (Main Interface)
+# ==========================================
+
+# 页面标题
+st.title("🤖 Walle: Credit Card Agent")
+st.caption("Maximize rewards, track benefits, and master your wallet.")
+
+# --- 🌟 功能 1: 空状态下的“建议卡片” (Hero Section) ---
+if not st.session_state.messages:
+    st.markdown(
+        """
+    <style>
+    div.stButton > button {
+        width: 100%;
+        border-radius: 10px;
+        height: 3em;
+        border: 1px solid #30363D;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### 👋 How can I help you today?")
+    st.markdown("Here are a few things I can do for you:")
+
+    # 创建 2x2 的建议网格
+    col1, col2 = st.columns(2)
+
+    # 定义点击处理函数
+    def click_suggestion(text):
+        st.session_state.messages.append({"role": "user", "content": text})
+
+    with col1:
+        if st.button(
+            "🍔 Dining Spending", help="Ask for the best card for restaurants"
+        ):
+            click_suggestion(
+                "I'm going out for dinner tonight. Which card should I use to maximize points?"
+            )
+            st.rerun()
+
+        if st.button("📅 Q1 Categories", help="Check quarterly rotating categories"):
+            click_suggestion(
+                "What are the Chase Freedom quarterly categories for Q1 2026?"
+            )
+            st.rerun()
+
+    with col2:
+        if st.button("✈️ Travel Bank Trick", help="Learn how to use airline credits"):
+            click_suggestion(
+                "How can I use my Amex Platinum airline incidental credit with United Travel Bank?"
+            )
+            st.rerun()
+
+        if st.button("🔍 Chase 5/24 Rule", help="Explain the famous application rule"):
+            click_suggestion(
+                "Explain the Chase 5/24 rule and check if I am affected based on my cards."
+            )
+            st.rerun()
+
+# --- 🌟 功能 2: 渲染历史聊天记录 ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 处理用户输入
-if prompt := st.chat_input("E.g., Which card for dining tonight?"):
+# --- 🌟 功能 3: 处理用户输入 ---
+# 3.1 底部输入框
+if prompt := st.chat_input("E.g., Which card for groceries?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    st.rerun()  # 强制刷新，以便立即显示用户的输入
 
+# 3.2 触发 AI 回复 (核心逻辑：只要最后一条是 User，就生成回答)
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with st.chat_message("assistant"):
         with st.status("Thinking...", expanded=False) as status:
-            response = generate_response_with_retry(
-                prompt, st.session_state.messages[:-1]
-            )
+            # 获取上下文
+            history = st.session_state.messages[:-1]
+            last_msg = st.session_state.messages[-1]["content"]
+
+            # 调用 Gemini
+            response = generate_response_with_retry(last_msg, history)
+
             status.update(label="Done", state="complete")
+
         st.markdown(response)
 
+    # 将 AI 回复存入历史
     st.session_state.messages.append({"role": "assistant", "content": response})

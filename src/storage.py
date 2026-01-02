@@ -119,3 +119,40 @@ def delete_card_from_db(user_id, card_index):
         if card_index < len(current_user_rows):
             row_to_delete = current_user_rows[card_index]
             sheet.delete_rows(row_to_delete)
+
+
+def update_card_in_db(user_id, card_index, updated_card: CreditCard):
+    """
+    更新指定用户的第 card_index 张卡片
+    注意：这里的 card_index 是指在该用户所有卡片列表中的索引 (0, 1, 2...)
+    """
+    sheet = get_db_connection()
+    if sheet:
+        # 1. 获取所有数据来定位行号
+        all_values = sheet.get_all_values()
+
+        current_user_rows = []
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue  # 跳过表头
+            if row[0] == user_id:
+                current_user_rows.append(i + 1)  # 记录真实的行号 (1-based)
+
+        # 2. 确保索引有效
+        if card_index < len(current_user_rows):
+            row_num = current_user_rows[card_index]
+
+            # 3. 构造更新后的数据行
+            # 格式必须与表头一致: user_id, bank, card_name, network, last_four, open_date
+            row_data = [
+                user_id,
+                updated_card.bank,
+                updated_card.name,
+                updated_card.network,
+                updated_card.last_four,
+                updated_card.open_date,
+            ]
+
+            # 4. 执行更新 (更新 A到F列)
+            # gspread 的 update 方法可以直接指定范围
+            sheet.update(range_name=f"A{row_num}:F{row_num}", values=[row_data])
