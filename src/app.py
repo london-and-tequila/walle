@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 import time
@@ -118,15 +119,49 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- CSS 样式 (保持不变) ---
+# --- CSS 样式 ---
 st.markdown(
     """
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; }
-    .stChatMessage { background-color: #1E2329; border-radius: 15px; padding: 10px; margin-bottom: 10px; border: 1px solid #30363D; }
-    .stButton button { border-radius: 20px; font-weight: bold; transition: all 0.3s ease; }
-    .stButton button:hover { transform: scale(1.02); }
-    [data-testid="stSidebar"] h1 { font-family: 'Helvetica Neue', sans-serif; font-weight: 700; background: -webkit-linear-gradient(45deg, #FFC107, #FF8F00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    /* 1. 顶部间距修复：加大 padding 防止被 Deploy 按钮挡住 */
+    .block-container {
+        padding-top: 5rem; /* 加大到 5rem，给顶部留足空间 */
+        padding-bottom: 2rem;
+    }
+    
+    /* 2. 标题微调：防止标题本身太靠上 */
+    h1 {
+        margin-top: 0rem;
+        padding-top: 0.5rem;
+    }
+    
+    /* 3. 聊天气泡样式 */
+    .stChatMessage {
+        background-color: #1E2329;
+        border-radius: 15px;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #30363D;
+    }
+    
+    /* 4. 按钮样式 */
+    .stButton button {
+        border-radius: 20px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .stButton button:hover {
+        transform: scale(1.02);
+    }
+    
+    /* 5. 侧边栏标题渐变色 */
+    [data-testid="stSidebar"] h1 {
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 700;
+        background: -webkit-linear-gradient(45deg, #FFC107, #FF8F00);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -183,9 +218,30 @@ POPULAR_CARDS = {
 }
 
 
-# --- 1. 登录逻辑 (Sidebar) ---
+# --- 1. 登录逻辑与侧边栏 (Sidebar) ---
 def render_login_sidebar():
     with st.sidebar:
+        # 🌐 1. 语言切换 (统一放在侧边栏最顶部)
+        lang_options = ["English", "中文"]
+        # 获取当前索引
+        current_index = 0 if st.session_state.language == "en" else 1
+
+        selected_lang_label = st.selectbox(
+            "Language / 语言",
+            lang_options,
+            index=current_index,
+            key="sidebar_lang_select",
+        )
+
+        # 处理语言变更
+        new_lang = "en" if selected_lang_label == "English" else "zh"
+        if new_lang != st.session_state.language:
+            st.session_state.language = new_lang
+            st.rerun()
+
+        st.divider()  # 加一条分割线，区分功能区
+
+        # 👤 2. 登录/用户信息区域
         st.title(t("login_title"))
 
         if "user_id" not in st.session_state:
@@ -216,23 +272,8 @@ CURRENT_USER_ID = render_login_sidebar()
 
 # --- 登录拦截 ---
 if not CURRENT_USER_ID:
-    # 顶部添加语言切换 (即使未登录也显示)
-    col_t, col_l = st.columns([8, 2])
-    with col_t:
-        st.title(t("login_required_title"))
-    with col_l:
-        # 语言选择器
-        lang_choice = st.selectbox(
-            "Language / 语言",
-            ["English", "中文"],
-            index=0 if st.session_state.language == "en" else 1,
-            key="lang_selector_login",
-        )
-        new_lang = "en" if lang_choice == "English" else "zh"
-        if new_lang != st.session_state.language:
-            st.session_state.language = new_lang
-            st.rerun()
-
+    # 🌟 修改：直接显示标题，不再需要右上角的语言选择列
+    st.title(t("login_required_title"))
     st.markdown(t("login_required_msg"))
     st.stop()
 
@@ -370,30 +411,12 @@ with st.sidebar:
             else:
                 st.error(t("missing_info"))
 
+
 # --- 主界面 Layout ---
 
-# 🌟 使用 columns 实现右上角语言切换
-col_main_title, col_main_lang = st.columns([7, 1.5])
-
-with col_main_title:
-    st.title(t("page_title"))
-    st.caption(t("page_caption"))
-
-with col_main_lang:
-    # 语言切换器
-    lang_opt = st.selectbox(
-        "🌐 Language",
-        ["English", "中文"],
-        index=0 if st.session_state.language == "en" else 1,
-        key="main_lang_select",
-        label_visibility="collapsed",
-    )  # 隐藏 label 更美观
-
-    # 状态同步
-    new_lang_main = "en" if lang_opt == "English" else "zh"
-    if new_lang_main != st.session_state.language:
-        st.session_state.language = new_lang_main
-        st.rerun()
+# 🌟 修改：直接显示标题，删除之前的 col_main_title / col_main_lang 分栏逻辑
+st.title(t("page_title"))
+st.caption(t("page_caption"))
 
 
 # --- Gemini 逻辑 (保持不变) ---
@@ -404,16 +427,36 @@ def get_gemini_client():
 def generate_response_with_retry(prompt, history):
     client = get_gemini_client()
     user_p = st.session_state.user_profile
-    # 提示词稍微加一点语言指示，让 Gemini 尽量用对应语言回答
+
+    # 🔥 1. 获取准确的今天日期
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+
     lang_instruction = (
         "Respond in English." if st.session_state.language == "en" else "请用中文回答。"
     )
 
+    # 🔥 2. 强制在 System Prompt 的最开头注入日期
+    # 注意：这里必须用 f""" ... """ 格式化字符串
     SYSTEM_INSTRUCTION = f"""
-    You are Walle. User Context: {user_p.get_summary()}
-    Always SEARCH before answering about categories.
+    [SYSTEM INFO]
+    Current Date: {today_str}
+    Role: You are Walle, an expert credit card agent.
+    
+    [USER CONTEXT]
+    {user_p.get_summary()}
+    
+    [TASK GUIDELINES]
+    1. Always SEARCH before answering about quarterly categories.
+    2. For Chase 5/24 Rule:
+       - Today is {today_str}.
+       - Check the 'Opened' date of each card in User Context.
+       - Any card opened more than 24 months ago does NOT count.
+       - Only count cards opened strictly within the last 24 months.
+       - Example: If today is 2026-01-02, a card opened on 2023-07-01 is >24 months old (30 months), so count = 0.
+    
     {lang_instruction}
     """
+
     tools = [search_credit_card_info]
     contents = [msg["content"] for msg in history]
     contents.append(prompt)

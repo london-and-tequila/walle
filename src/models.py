@@ -33,6 +33,12 @@ class CreditCard:
     def add_benefit(self, benefit: Benefit):
         self.benefits.append(benefit)
 
+    # ✨ 新增方法：专门生成给 AI 看的描述，包含开卡日期
+    def to_prompt_string(self):
+        # 如果有开卡日期，就加进去；否则留空
+        date_info = f", Opened: {self.open_date}" if self.open_date else ""
+        return f"- {self.bank} {self.name} (Network: {self.network}{date_info})"
+
     def __str__(self):
         return f"{self.bank} {self.name} ({self.last_four})"
 
@@ -53,9 +59,15 @@ class UserProfile:
 
     def get_summary(self) -> str:
         """生成一段给 LLM 看的 System Prompt 摘要"""
+        if not self.cards:
+            return "User has no cards."
+
         summary = [f"User holds {len(self.cards)} cards:"]
         for card in self.cards:
-            summary.append(f"- {card.bank} {card.name}")
+            # 🔥 修改这里：调用新的 to_prompt_string 方法
+            # 这样 AI 就能看到 "Opened: 2023-07-01" 了
+            summary.append(card.to_prompt_string())
+
             for ben in card.benefits:
                 summary.append(
                     f"  * [Benefit] {ben.name}: ${ben.remaining_amount} left ({ben.refresh_period})"
