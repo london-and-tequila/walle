@@ -1,0 +1,19 @@
+[theme]
+# 主色调 (用于按钮、选中状态等) - 采用类似 Amex 金卡的金色/橙色
+primaryColor = "#FFC107"
+
+# 背景颜色 - 深海蓝/午夜黑，比纯黑更有质感
+backgroundColor = "#0E1117"
+
+# 二级背景色 (用于侧边栏、输入框背景)
+secondaryBackgroundColor = "#161B22"
+
+# 字体颜色
+textColor = "#F0F2F6"
+
+# 字体选择 (Sans serif 看起来更现代)
+font = "sans serif"
+
+[server]
+# 隐藏底部的 "Made with Streamlit"
+headless = true

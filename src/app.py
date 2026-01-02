@@ -16,21 +16,82 @@ from src.tools.search import search_credit_card_info
 
 # --- 2. 页面配置 ---
 st.set_page_config(
-    page_title="Walle - Credit Card AI", page_icon="🤖", layout="centered"
+    page_title="Walle AI",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+# --- 🌟 界面美化 (Custom CSS) ---
+st.markdown(
+    """
+<style>
+    /* 1. 全局字体与间距优化 */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    
+    /* 2. 聊天气泡美化 */
+    .stChatMessage {
+        background-color: #1E2329;
+        border-radius: 15px;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #30363D;
+    }
+    
+    /* 3. 按钮样式 - 圆角与渐变 */
+    .stButton button {
+        border-radius: 20px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .stButton button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 4px 12px rgba(255, 193, 7, 0.2);
+    }
+
+    /* 4. 输入框美化 */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"] {
+        border-radius: 10px;
+    }
+    
+    /* 5. 侧边栏标题美化 */
+    [data-testid="stSidebar"] h1 {
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 700;
+        background: -webkit-linear-gradient(45deg, #FFC107, #FF8F00);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 # 加载环境变量
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 
+
+# --- 辅助函数：根据网络显示图标 ---
+def get_network_icon(network):
+    icons = {
+        "Visa": "💳",  # 或者用 emoji "🇻"
+        "Mastercard": "🟠",
+        "Amex": "🦅",
+        "Discover": "🔭",
+    }
+    return icons.get(network, "💳")
+
+
 # --- 3. 初始化 Session State (记忆) ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "user_profile" not in st.session_state:
-    # 初始化演示用户 (只执行一次)
     user = UserProfile(user_id="owner_001")
-
+    # 默认卡片 (Demo)
     cf = CreditCard(
         bank="Chase", name="Freedom Flex", network="Mastercard", last_four="1234"
     )
@@ -38,85 +99,70 @@ if "user_profile" not in st.session_state:
         Benefit("Quarterly 5%", "rotation", "5% cashback", "quarterly", 1500.0)
     )
     user.add_card(cf)
-
     plat = CreditCard(bank="Amex", name="Platinum", network="Amex", last_four="9999")
-    plat.add_benefit(
-        Benefit("Uber Cash", "transport", "$15 monthly credit", "monthly", 15.0)
-    )
-    plat.add_benefit(
-        Benefit("Airline Fee", "travel", "$200 annual credit", "annual", 200.0)
-    )
+    plat.add_benefit(Benefit("Uber Cash", "transport", "$15 monthly", "monthly", 15.0))
     user.add_card(plat)
-
     st.session_state.user_profile = user
 
-# --- 4. 侧边栏：显示用户画像 ---
-# --- 4. 侧边栏：用户配置 (User Profile Control) ---
-with st.sidebar:
-    st.title("💳 Walle's Brain")
 
-    # === 部分 A: 展示当前卡片 (Current Deck) ===
-    st.subheader("Your Wallet")
+# --- 侧边栏设计 (重构版) ---
+with st.sidebar:
+    st.title("🤖 Walle Brain")
+    st.caption("Your Personal Finance Agent")
+    st.markdown("---")
+
+    # === A. My Wallet (卡片列表) ===
+    st.subheader("💳 Your Wallet")
 
     user = st.session_state.user_profile
-
     if not user.cards:
-        st.info("No cards yet. Add one below!")
+        st.warning("No cards loaded.")
     else:
-        # 遍历卡片，显示删除按钮
         for i, card in enumerate(user.cards):
-            # 使用 expander 既能看详情，又能收起节省空间
-            with st.expander(f"{card.bank} {card.name}", expanded=False):
-                st.write(f"**Network:** {card.network}")
-                st.write("**Benefits:**")
-                if card.benefits:
-                    for ben in card.benefits:
-                        st.caption(f"• {ben.name}: ${ben.remaining_amount}")
-                else:
-                    st.caption("(AI will infer standard benefits)")
+            icon = get_network_icon(card.network)
+            # 使用更紧凑的显示方式
+            with st.container():
+                col1, col2 = st.columns([0.8, 0.2])
+                with col1:
+                    st.markdown(f"**{card.bank} {card.name}**")
+                    st.caption(f"{icon} {card.network} • *{card.last_four}*")
+                with col2:
+                    if st.button("✕", key=f"del_{i}", help="Remove Card"):
+                        user.cards.pop(i)
+                        st.rerun()
+                st.markdown("---")  # 分割线
 
-                # 删除按钮 (使用唯一的 key 防止冲突)
-                if st.button("🗑️ Remove", key=f"remove_{i}"):
-                    user.cards.pop(i)
-                    st.rerun()  # 强制刷新页面以更新列表
+    # === B. Add New Card (紧凑表单) ===
+    with st.expander("➕ Add New Card", expanded=False):
+        with st.form("add_card_form", clear_on_submit=True):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                new_bank = st.text_input("Bank", placeholder="Chase")
+            with col_b:
+                new_network = st.selectbox(
+                    "Network", ["Visa", "Mastercard", "Amex", "Discover"]
+                )
 
-    st.divider()
+            new_name = st.text_input("Card Name", placeholder="Sapphire Preferred")
 
-    # === 部分 B: 添加新卡 (Add New Card) ===
-    st.subheader("Add New Card")
+            if st.form_submit_button("Add to Wallet", use_container_width=True):
+                if new_bank and new_name:
+                    new_card = CreditCard(
+                        bank=new_bank,
+                        name=new_name,
+                        network=new_network,
+                        last_four="0000",
+                    )
+                    st.session_state.user_profile.add_card(new_card)
+                    st.success("Added!")
+                    time.sleep(0.5)
+                    st.rerun()
 
-    with st.form("add_card_form"):
-        new_bank = st.text_input("Bank", placeholder="e.g. Citi")
-        new_name = st.text_input("Card Name", placeholder="e.g. Custom Cash")
-        new_network = st.selectbox(
-            "Network", ["Visa", "Mastercard", "Amex", "Discover"]
-        )
-
-        # 简单起见，我们在网页添加时暂不手动输入复杂的 Benefits
-        # Walle 的大脑足够聪明，如果你只有卡名，它会根据通用知识推理福利
-        submitted = st.form_submit_button("➕ Add Card")
-
-        if submitted and new_bank and new_name:
-            # 创建新卡对象
-            new_card = CreditCard(
-                bank=new_bank,
-                name=new_name,
-                network=new_network,
-                last_four="0000",  # 占位符
-            )
-            # 添加到 Session State
-            st.session_state.user_profile.add_card(new_card)
-            st.success(f"Added {new_name}!")
-            time.sleep(0.5)
-            st.rerun()
-
-    st.divider()
-
-    # === 部分 C: 重置数据 ===
-    if st.button("🔄 Reset to Default Demo"):
-        # 清空 Session State 中的 key，触发重新初始化
+    # === C. Reset ===
+    if st.button("🔄 Reset Demo", use_container_width=True):
         del st.session_state.user_profile
         st.rerun()
+
 # --- 5. 核心逻辑函数 ---
 
 
@@ -199,38 +245,23 @@ def generate_response_with_retry(prompt, history):
     return "❌ System Error: Max retries exceeded. The API is too busy."
 
 
-# --- 6. 聊天界面渲染 ---
-
-st.title("🤖 Walle: Credit Card Agent")
-st.caption(
-    "Ask me about quarterly categories, rewards optimization, or spending tricks."
-)
-
 # 渲染历史消息
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # 处理用户输入
-if prompt := st.chat_input("How can I maximize my points today?"):
-    # 1. 显示用户消息
+if prompt := st.chat_input("E.g., Which card for dining tonight?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. 显示助手正在思考
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-
-        # 使用 status 容器显示思考过程 (模拟联网搜索的感觉)
-        with st.status("Thinking & Searching...", expanded=False) as status:
-            full_response = generate_response_with_retry(
+        with st.status("Thinking...", expanded=False) as status:
+            response = generate_response_with_retry(
                 prompt, st.session_state.messages[:-1]
             )
-            status.update(label="Done!", state="complete", expanded=False)
+            status.update(label="Done", state="complete")
+        st.markdown(response)
 
-        # 显示最终回复
-        message_placeholder.markdown(full_response)
-
-    # 3. 保存助手消息
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+    st.session_state.messages.append({"role": "assistant", "content": response})
