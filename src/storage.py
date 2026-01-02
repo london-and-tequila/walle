@@ -17,19 +17,32 @@ def get_db_connection():
     连接到 Google Sheets (带缓存，避免每次刷新都重新连接)
     """
     try:
-        # 从 st.secrets 读取配置
-        credentials_dict = st.secrets["gcp_service_account"]
+        # 1. 将 secrets 转换为普通字典 (Streamlit secrets 有时是特殊对象)
+        credentials_dict = dict(st.secrets["gcp_service_account"])
+
+        # 2. 🚑 关键修复：处理 private_key 中的换行符
+        # TOML 读取出来的 \n 有时是字符串字面量，需要转义为真正的换行符
+        if "private_key" in credentials_dict:
+            credentials_dict["private_key"] = credentials_dict["private_key"].replace(
+                "\\n", "\n"
+            )
 
         # 创建认证凭证
         creds = Credentials.from_service_account_info(credentials_dict, scopes=SCOPES)
 
         # 授权并打开表格
         client = gspread.authorize(creds)
-        # ⚠️ 确保你的表格名字叫 "Walle_Database"
-        sheet = client.open("Walle_Database").worksheet("Cards")
+
+        # 打开表格
+        sheet = client.open("walle_database").worksheet("Cards")
         return sheet
+
     except Exception as e:
+        # 打印更详细的错误堆栈，方便调试
+        import traceback
+
         st.error(f"❌ Database Connection Error: {e}")
+        st.code(traceback.format_exc())  # 这行能让你看到具体的报错位置
         return None
 
 
@@ -55,6 +68,7 @@ def load_user_data(user_id="owner_001"):
                 name=str(row["card_name"]),
                 network=str(row["network"]),
                 last_four=str(row["last_four"]),
+                open_date=str(row.get("open_date", "")),
             )
             # 注意：Benefit 这里暂时留空，或者让 AI 在运行时推理
             # 如果你想存 Benefit，需要在表格加更多列，目前 V1 保持简单
@@ -70,7 +84,14 @@ def save_new_card(user_id, card: CreditCard):
     sheet = get_db_connection()
     if sheet:
         # 构造一行数据 [user_id, bank, card_name, network, last_four]
-        row_data = [user_id, card.bank, card.name, card.network, card.last_four]
+        row_data = [
+            user_id,
+            card.bank,
+            card.name,
+            card.network,
+            card.last_four,
+            card.open_date,
+        ]
         sheet.append_row(row_data)
 
 

@@ -8,9 +8,15 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+
+from src.models import CreditCard
 from src.storage import delete_card_from_db, load_user_data, save_new_card
+from src.tools.search import search_credit_card_info
 
 # --- 数据预设：全美主流银行与热门卡片 (参考 USCreditCardGuide) ---
+
 POPULAR_CARDS = {
     "Chase": [
         "Sapphire Preferred",
@@ -113,11 +119,65 @@ POPULAR_CARDS = {
     "Other": [],  # 兜底选项
 }
 
-# --- 1. 路径配置 (确保能找到 src 下的模块) ---
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.models import CreditCard
-from src.tools.search import search_credit_card_info
+# --- 1. 登录逻辑 (Sidebar) ---
+def render_login_sidebar():
+    """渲染侧边栏的登录/用户信息区"""
+    with st.sidebar:
+        st.title("🤖 Walle Login")
+
+        # 检查 Session State 中是否有 user_id
+        if "user_id" not in st.session_state:
+            # === A. 未登录状态 ===
+            st.info("Please enter your email to access your wallet.")
+
+            # 使用 form 避免每输入一个字就刷新
+            with st.form("login_form"):
+                email_input = st.text_input(
+                    "Email Address", placeholder="e.g. tony@stark.com"
+                )
+                submitted = st.form_submit_button("🚀 Login / Register")
+
+                if submitted and email_input:
+                    # 简单处理：把邮箱转为小写，作为唯一 ID
+                    user_id = email_input.strip().lower()
+                    st.session_state.user_id = user_id
+                    st.success(f"Welcome, {user_id}!")
+                    time.sleep(0.5)
+                    st.rerun()  # 强制刷新进入已登录状态
+
+            return None  # 返回 None 表示未登录
+
+        else:
+            # === B. 已登录状态 ===
+            current_user = st.session_state.user_id
+            st.success(f"👤 User: {current_user}")
+
+            # 登出按钮
+            if st.button("Logout", type="secondary"):
+                # 清除状态
+                del st.session_state.user_id
+                if "user_profile" in st.session_state:
+                    del st.session_state.user_profile
+                st.rerun()
+
+            return current_user
+
+
+# 获取当前登录用户 (如果未登录，这里会中断后续渲染)
+CURRENT_USER_ID = render_login_sidebar()
+
+if not CURRENT_USER_ID:
+    # 如果没登录，右侧主界面显示欢迎页，并停止执行后续代码
+    st.title("Welcome to Walle AI 🤖")
+    st.markdown("""
+    Your personal credit card maximizer agent.
+    
+    👈 **Please login using your email in the sidebar to start.**
+    
+    *(Data is securely stored in your private Google Sheet)*
+    """)
+    st.stop()  # 🛑 停止执行后续代码 (非常重要！)
 
 # --- 2. 页面配置 ---
 st.set_page_config(
@@ -196,9 +256,10 @@ if "messages" not in st.session_state:
 
 # 🔥 核心修改：不再使用 hardcoded 数据，而是从 Google Sheets 加载
 if "user_profile" not in st.session_state:
-    with st.spinner("Connecting to Walle Brain (Database)..."):
-        # 默认加载 owner_001 的数据
-        st.session_state.user_profile = load_user_data(user_id="owner_001")
+    with st.spinner(f"Loading wallet for {CURRENT_USER_ID}..."):
+        # 🔥 使用动态的 Email 作为 ID 加载数据
+        st.session_state.user_profile = load_user_data(user_id=CURRENT_USER_ID)
+
 # --- 侧边栏设计 (重构版) ---
 with st.sidebar:
     st.title("🤖 Walle Brain")
@@ -223,7 +284,7 @@ with st.sidebar:
                 with col2:
                     if st.button("✕", key=f"del_{i}", help="Remove Card"):
                         # 🔥 1. 先从云端数据库删除
-                        delete_card_from_db("owner_001", i)
+                        delete_card_from_db(CURRENT_USER_ID, i)
 
                         # 2. 再从本地删除
                         user.cards.pop(i)
@@ -284,18 +345,32 @@ with st.sidebar:
             )
             final_last_four = last_four_input if last_four_input else "0000"
 
+        # ✨ 新增：开卡日期输入 (Optional)
+        # value=None 让它默认显示为空，看起来就是 Optional 的
+        open_date_input = st.date_input(
+            "Card Open Date (Optional)",
+            value=None,
+            min_value=None,
+            max_value=None,
+            help="Used to calculate Chase 5/24 status.",
+        )
+
         # 4. 添加按钮
         if st.button("Add to Wallet", use_container_width=True):
             if final_bank and final_card_name:
+                final_open_date = (
+                    open_date_input.strftime("%Y-%m-%d") if open_date_input else ""
+                )
                 new_card = CreditCard(
                     bank=final_bank,
                     name=final_card_name,
                     network=final_network,
                     last_four=final_last_four,
+                    open_date=final_open_date,
                 )
 
                 # 🔥 1. 先保存到云端数据库
-                save_new_card("owner_001", new_card)
+                save_new_card(CURRENT_USER_ID, new_card)
 
                 # 2. 再更新本地 Session State (为了即时显示，不用重新拉取数据库)
                 st.session_state.user_profile.add_card(new_card)

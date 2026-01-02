@@ -28,6 +28,7 @@ class CreditCard:
     network: str  # e.g., "Visa", "Amex"
     last_four: str = "0000"  # 卡号后四位，用于区分
     benefits: List[Benefit] = field(default_factory=list)
+    open_date: str = ""
 
     def add_benefit(self, benefit: Benefit):
         self.benefits.append(benefit)
