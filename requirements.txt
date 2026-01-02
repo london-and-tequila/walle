@@ -1,5 +1,4 @@
-google-genai
-python-dotenv
-requests
-beautifulsoup4 
 streamlit
+google-genai
+tavily-python
+python-dotenv
