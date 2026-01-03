@@ -20,7 +20,11 @@ from src.storage import (
     update_card_in_db,
 )
 from src.tools.search import search_credit_card_info
-from src.utils import create_google_calendar_url, create_ics_file_content
+from src.utils import (
+    create_google_calendar_url,
+    create_ics_file_content,
+    get_available_models,
+)
 
 # --- 1. 国际化字典 (Translation Dictionary) ---
 TRANSLATIONS = {
@@ -210,12 +214,14 @@ POPULAR_CARDS = {
         "Freedom Flex",
         "Freedom Unlimited",
         "Ink Business Preferred",
+        "Hyatt",
     ],
     "Amex": ["Platinum", "Gold", "Green", "Blue Cash Preferred", "Delta SkyMiles Gold"],
     "Citi": ["Premier", "Double Cash", "Custom Cash"],
     "Capital One": ["Venture X", "SavorOne"],
     "Discover": ["It Cash Back"],
     "Bilt": ["Bilt Mastercard"],
+    "Bank of America": ["Cash Rewards"],
     "Other": [],
 }
 
@@ -225,6 +231,12 @@ def analyze_benefits_with_gemini(user_profile):
     client = get_gemini_client()
     today_year = datetime.date.today().year
 
+    lang = st.session_state.get("language", "en")
+    lang_instruction = (
+        "Output the 'benefit' and 'description' values in Simplified Chinese."
+        if lang == "zh"
+        else "Output in English."
+    )
     # 构造专门的 Prompt
     prompt = f"""
     Analyze the following credit cards held by the user:
@@ -233,6 +245,7 @@ def analyze_benefits_with_gemini(user_profile):
     Task:
     Identify time-sensitive benefits (credits, free nights, allowances) that expire annually or monthly.
     Return a JSON list. Do not output markdown code blocks, just raw JSON.
+    {lang_instruction}
     
     Format:
     [
@@ -333,7 +346,24 @@ def render_login_sidebar():
             st.rerun()
 
         st.divider()  # 加一条分割线，区分功能区
+        # 🧠 2. 模型选择 (新增功能)
+        # 获取可用模型 (带缓存，只会在启动时检查一次)
+        available_models = get_available_models(api_key)
+        model_options = list(available_models.keys())
 
+        # 默认选中第一个 (通常是 Fast)
+        selected_label = st.selectbox(
+            "Model / 模型基座",
+            model_options,
+            index=0,
+            key="model_selector",
+            help="Select the brain power: Flash (Fast) vs Pro (Smart)",
+        )
+
+        # 将选中的真实 Model ID 存入 Session State
+        st.session_state.selected_model_id = available_models[selected_label]
+
+        st.divider()
         # 👤 2. 登录/用户信息区域
         st.title(t("login_title"))
 
@@ -522,12 +552,14 @@ with st.sidebar:
                 st.markdown(f"**{item['card']}**")
                 st.info(f"📌 {item['benefit']}\n\n📅 Deadline: {item['deadline']}")
 
-                # 生成链接/文件
+                event_title = f"{item['card']}: {item['benefit']}"
+
+                # 生成链接/文件 (传入新的 event_title)
                 gcal_link = create_google_calendar_url(
-                    item["benefit"], item["description"], item["deadline"]
+                    event_title, item["description"], item["deadline"]
                 )
                 ics_content = create_ics_file_content(
-                    item["benefit"], item["description"], item["deadline"]
+                    event_title, item["description"], item["deadline"]
                 )
 
                 c1, c2 = st.columns(2)
